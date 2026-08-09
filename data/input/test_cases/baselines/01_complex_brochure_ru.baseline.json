@@ -1,0 +1,42 @@
+{
+  "case_id": "01_complex_brochure_ru",
+  "image_file": "01_complex_brochure_ru.jpg",
+  "source_e2e_result": "data/output/edb122a8-c010-42f5-a1e1-9a556e72dfbf/result.json",
+  "extracted_at": "2026-08-09T15:12:26.333859Z",
+  "source_image_dimensions": {
+    "width": 1120,
+    "height": 1584
+  },
+  "stats": {
+    "total_blocks": 48,
+    "blocks_requiring_review": 44,
+    "avg_confidence": 0.3263513084046374,
+    "ocr_blocks": 48,
+    "vision_blocks": 48
+  },
+  "unmatched_vision_blocks_count": 0,
+  "translated_blocks_count": 48,
+  "review_reason_counts": {
+    "low_ocr_confidence": 34,
+    "text_mismatch": 20,
+    "vision_scope_fallback": 22
+  },
+  "required_texts": [
+    "Беречь",
+    "иербне"
+  ],
+  "required_blocks": [
+    {
+      "block_id": "block_003",
+      "review_reasons_contains_any": [
+        "low_ocr_confidence"
+      ]
+    },
+    {
+      "block_id": "block_015",
+      "review_reasons_contains_any": [
+        "text_mismatch"
+      ]
+    }
+  ]
+}

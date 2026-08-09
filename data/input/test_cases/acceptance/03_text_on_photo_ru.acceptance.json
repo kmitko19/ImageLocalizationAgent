@@ -1,0 +1,13 @@
+{
+  "case_id": "03_text_on_photo_ru",
+  "image_file": "03_text_on_photo_ru.jpg",
+  "image_status": "missing",
+  "baseline_file": null,
+  "target_language": "EN",
+  "source_language_mode": "auto",
+  "automated_run": false,
+  "expectations": {
+    "pipeline_completes": true,
+    "notes": "Text over heterogeneous photo background"
+  }
+}

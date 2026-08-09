@@ -1,0 +1,56 @@
+{
+  "case_id": "02_text_and_nontext_ru",
+  "image_file": "02_text_and_nontext_ru.jpg",
+  "image_status": "available",
+  "baseline_file": "baselines/02_text_and_nontext_ru.baseline.json",
+  "target_language": "EN",
+  "source_language_mode": "auto",
+  "automated_run": true,
+  "expectations": {
+    "pipeline_completes": true,
+    "stats": {
+      "total_blocks": {
+        "eq": 27
+      },
+      "ocr_blocks": {
+        "eq": 27
+      },
+      "vision_blocks": {
+        "eq": 27
+      },
+      "blocks_requiring_review": {
+        "eq": 2
+      }
+    },
+    "unmatched_vision_blocks_count": {
+      "eq": 0
+    },
+    "translated_blocks_min": 27,
+    "review_reason_counts": {
+      "low_ocr_confidence": {
+        "gte": 2
+      },
+      "probable_non_text": {
+        "eq": 1
+      }
+    },
+    "required_texts": [
+      "Ваши",
+      "за"
+    ],
+    "required_blocks": [
+      {
+        "block_id": "block_018",
+        "review_reasons_contains_any": [
+          "low_ocr_confidence"
+        ]
+      },
+      {
+        "block_id": "block_027",
+        "review_reasons_contains_any": [
+          "probable_non_text"
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,33 @@
+# Image Localization Agent — settings
+
+openai:
+  vision_model: gpt-4o
+  translation_model: gpt-4o-mini
+
+ocr:
+  languages:
+    - ru
+    - en
+
+fusion:
+  iou_threshold: 0.25
+  text_similarity_threshold: 0.55
+  text_mismatch_threshold: 0.5
+  low_ocr_confidence_threshold: 0.5
+  low_font_size_confidence_threshold: 0.4
+
+paths:
+  test_cases_dir: data/input/test_cases
+  output_dir: data/output
+
+gui:
+  server_port: 7860
+
+languages:
+  source:
+    - auto
+    - ru
+    - en
+  target:
+    - en
+    - ru

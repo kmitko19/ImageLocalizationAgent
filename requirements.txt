@@ -1,0 +1,18 @@
+# Core
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+pyyaml>=6.0
+
+# GUI
+gradio>=4.0.0
+
+# OCR (local)
+easyocr>=1.7.0
+
+# Image processing (deterministic)
+Pillow>=10.0.0
+opencv-python-headless>=4.8.0
+numpy>=1.24.0
+
+# AI (OpenAI — Vision + Translation)
+openai>=1.30.0
