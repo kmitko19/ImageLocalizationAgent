@@ -1,8 +1,8 @@
 """Pipeline orchestrator — wires all analysis stages into run_pipeline().
 
 Sequence:
-  load image → OCR → Vision → fusion → visual analysis → translation
-  → finalize render metadata → PipelineResult
+  load image → OCR → Vision → fusion → visual analysis → text mask / geometry
+  → translation → finalize render metadata → PipelineResult
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from imageloc.config import FusionSettings
 from imageloc.fusion.ocr_vision_fusion import FusedBlock, fuse
 from imageloc.models.raw_blocks import RawVisionBlock
 from imageloc.models.result import PipelineResult, Stats
-from imageloc.models.text_block import RenderHints, ReviewInfo, TextBlock, VisualStyle, BackgroundInfo
+from imageloc.models.text_block import RenderGeometry, RenderHints, ReviewInfo, TextBlock, VisualStyle, BackgroundInfo
 from imageloc.providers.base import OCRProvider, VisionProvider
 from imageloc.providers.openai_translation_provider import (
     OpenAITranslationProvider,
@@ -24,6 +24,7 @@ from imageloc.providers.openai_translation_provider import (
 from imageloc.utils.image_loader import load_image
 from imageloc.utils.non_text_detector import mark_obvious_non_text
 from imageloc.utils.render_metadata import finalize_text_block_metadata
+from imageloc.utils.text_mask_analyzer import analyze_text_mask_for_block
 from imageloc.utils.visual_analyzer import analyze_fused_block
 
 
@@ -58,7 +59,16 @@ class PipelineOrchestrator:
 
         vision_by_block_id = _index_vision_blocks(vision_blocks)
 
-        analyzed_blocks: list[tuple[FusedBlock, VisualStyle, RenderHints, BackgroundInfo | None, bool]] = []
+        analyzed_blocks: list[
+            tuple[
+                FusedBlock,
+                VisualStyle,
+                RenderHints,
+                BackgroundInfo | None,
+                RenderGeometry | None,
+                bool,
+            ]
+        ] = []
         for fused in fusion_result.fused_blocks:
             vision_raw = vision_by_block_id.get(fused.id)
             fused, skip_translation = mark_obvious_non_text(fused, vision_raw)
@@ -70,12 +80,30 @@ class PipelineOrchestrator:
                 font_weight=vision_raw.font_weight if vision_raw else None,
                 alignment=vision_raw.alignment if vision_raw else None,
             )
-            analyzed_blocks.append((fused, visual, render_hints, background_info, skip_translation))
+            mask_result = analyze_text_mask_for_block(
+                loaded.image,
+                fused,
+                visual=visual,
+                render_hints=render_hints,
+                background=background_info,
+                source_image_id=loaded.source_image_id,
+                output_dir=self.output_dir,
+            )
+            analyzed_blocks.append(
+                (
+                    fused,
+                    mask_result.visual,
+                    render_hints,
+                    background_info,
+                    mask_result.render_geometry,
+                    skip_translation,
+                )
+            )
 
         translation_details = self.translation_provider.translate_fused_blocks(
             [
                 (fused, render_hints)
-                for fused, _, render_hints, _, skip_translation in analyzed_blocks
+                for fused, _, render_hints, _, _, skip_translation in analyzed_blocks
                 if not skip_translation
             ],
             target_lang=target_language,
@@ -92,9 +120,10 @@ class PipelineOrchestrator:
                     translation=translation_by_id.get(fused.id),
                     skip_translation=skip_translation,
                     background=background_info,
+                    render_geometry=render_geometry,
                 )
             )
-            for fused, visual, render_hints, background_info, skip_translation in analyzed_blocks
+            for fused, visual, render_hints, background_info, render_geometry, skip_translation in analyzed_blocks
         ]
 
         resolved_source_language = source_language or _detect_source_language(fusion_result.fused_blocks)
@@ -175,6 +204,7 @@ def _build_text_block(
     translation: TranslationResultDetail | None,
     skip_translation: bool = False,
     background: BackgroundInfo | None = None,
+    render_geometry: RenderGeometry | None = None,
 ) -> TextBlock:
     return TextBlock(
         id=fused.id,
@@ -194,6 +224,7 @@ def _build_text_block(
         render_hints=render_hints,
         review=_finalize_review(fused.review),
         background=background,
+        render_geometry=render_geometry,
     )
 
 

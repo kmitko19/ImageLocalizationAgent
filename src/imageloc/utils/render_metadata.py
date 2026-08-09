@@ -84,7 +84,11 @@ def finalize_text_block_metadata(block: TextBlock) -> TextBlock:
         original_text=block.original_text,
         translated_text=block.translated_text,
     )
-    render_geometry = build_render_geometry(block.visual, render_hints)
+    render_geometry = (
+        block.render_geometry
+        if block.render_geometry is not None
+        else build_render_geometry(block.visual, render_hints)
+    )
     background = block.background if block.background is not None else build_background_info(block.visual)
 
     return block.model_copy(
