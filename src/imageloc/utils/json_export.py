@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from imageloc.models.result import PipelineResult
+from imageloc.utils.render_metadata import refresh_translation_dependent_render_hints
 
 
 def save_result(result: PipelineResult, output_dir: Path) -> Path:
@@ -71,7 +72,10 @@ def apply_block_review(
         if translated_text is not None:
             updates["translated_text"] = translated_text
 
-        updated_blocks.append(block.model_copy(update=updates))
+        updated_block = block.model_copy(update=updates)
+        if original_text is not None or translated_text is not None:
+            updated_block = refresh_translation_dependent_render_hints(updated_block)
+        updated_blocks.append(updated_block)
 
     return result.model_copy(update={"text_blocks": updated_blocks})
 

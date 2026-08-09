@@ -49,6 +49,60 @@ class VisualStyle(BaseModel):
     alignment: str | None = None
     rotation_deg: float = 0.0
 
+    font_family_candidate: str | None = None
+    font_family_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+    letter_spacing_px: float | None = None
+    letter_spacing_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+    line_height_ratio: float | None = None
+    line_height_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+    vertical_alignment: str | None = None
+    text_opacity: float | None = None
+    text_transform: str | None = None
+
+    stroke_color: str | None = None
+    stroke_width_px: float = 0.0
+    stroke_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+    shadow_color: str | None = None
+    shadow_opacity: float | None = None
+    shadow_offset_x_px: float | None = None
+    shadow_offset_y_px: float | None = None
+    shadow_blur_px: float | None = None
+    shadow_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+    fill_type: str = "solid"
+    gradient_start_color: str | None = None
+    gradient_end_color: str | None = None
+    gradient_angle_deg: float | None = None
+    gradient_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
+class RenderGeometry(BaseModel):
+    """Future renderer geometry hints derived from OCR polygon and block layout."""
+
+    baseline_angle_deg: float | None = None
+    perspective_quad: list[Point] | None = None
+    mask_bbox: BoundingBox | None = None
+    mask_path: str | None = None
+    mask_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    writing_direction: str = "horizontal"
+    perspective_detected: bool = False
+
+
+class BackgroundInfo(BaseModel):
+    """Future renderer background classification for inpainting decisions."""
+
+    background_type: str = "unknown"
+    dominant_color: str | None = None
+    secondary_color: str | None = None
+    complexity_score: float = 0.0
+    classification_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    inpaint_required: bool = False
+    preferred_restore_method: str = "auto"
+
 
 class RenderHints(BaseModel):
     """Data a future rendering stage needs to fit translated text into the
@@ -60,6 +114,29 @@ class RenderHints(BaseModel):
     target_line_count: int = 1
     text_direction: str = "horizontal"
     preserve_layout: bool = True
+
+    original_char_count: int | None = None
+    translated_char_count: int | None = None
+    length_ratio: float | None = None
+
+    font_scale_min: float = 0.65
+    font_scale_max: float = 1.10
+
+    letter_spacing_scale_min: float = 0.85
+    letter_spacing_scale_max: float = 1.15
+
+    line_height_scale_min: float = 0.85
+    line_height_scale_max: float = 1.15
+
+    max_line_count: int | None = None
+
+    bbox_expansion_allowed: bool = False
+    bbox_expansion_px: int = 0
+
+    allow_font_substitution: bool = True
+    allow_line_reflow: bool = True
+
+    overflow_strategy: str = "fit"
 
 
 class ReviewInfo(BaseModel):
@@ -93,3 +170,6 @@ class TextBlock(BaseModel):
     visual: VisualStyle
     render_hints: RenderHints
     review: ReviewInfo
+
+    render_geometry: RenderGeometry | None = None
+    background: BackgroundInfo | None = None

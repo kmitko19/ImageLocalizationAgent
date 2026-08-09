@@ -155,7 +155,7 @@ def test_ocr_pipeline_produces_valid_pipeline_result_and_json(mock_reader_cls: M
     restored = PipelineResult.model_validate_json(json_str)
 
     # --- Assert: PipelineResult structure ---
-    assert result.version == "1.1"
+    assert result.version == "1.2"
     assert result.source_image_id == loaded.source_image_id
     assert result.source_image.filename == "catalog_page.png"
     assert result.source_image.width == 400

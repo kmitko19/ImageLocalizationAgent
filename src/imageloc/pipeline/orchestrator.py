@@ -1,7 +1,8 @@
 """Pipeline orchestrator — wires all analysis stages into run_pipeline().
 
 Sequence:
-  load image → OCR → Vision → fusion → visual analysis → translation → PipelineResult
+  load image → OCR → Vision → fusion → visual analysis → translation
+  → finalize render metadata → PipelineResult
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from imageloc.providers.openai_translation_provider import (
 )
 from imageloc.utils.image_loader import load_image
 from imageloc.utils.non_text_detector import mark_obvious_non_text
+from imageloc.utils.render_metadata import finalize_text_block_metadata
 from imageloc.utils.visual_analyzer import analyze_fused_block
 
 
@@ -82,12 +84,14 @@ class PipelineOrchestrator:
         translation_by_id = {item.id: item for item in translation_details}
 
         text_blocks = [
-            _build_text_block(
-                fused=fused,
-                visual=visual,
-                render_hints=render_hints,
-                translation=translation_by_id.get(fused.id),
-                skip_translation=skip_translation,
+            finalize_text_block_metadata(
+                _build_text_block(
+                    fused=fused,
+                    visual=visual,
+                    render_hints=render_hints,
+                    translation=translation_by_id.get(fused.id),
+                    skip_translation=skip_translation,
+                )
             )
             for fused, visual, render_hints, skip_translation in analyzed_blocks
         ]

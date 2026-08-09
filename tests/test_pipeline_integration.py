@@ -150,7 +150,7 @@ def test_full_pipeline_from_image_to_json(mock_reader_cls: MagicMock, tmp_path):
     restored = load_result(json_path)
     exported = validate_json_export(result)
 
-    assert result.version == "1.1"
+    assert result.version == "1.2"
     assert len(result.text_blocks) == 2
     assert result.source_language == "RU"
     assert result.target_language == "EN"
@@ -173,6 +173,18 @@ def test_full_pipeline_from_image_to_json(mock_reader_cls: MagicMock, tmp_path):
     assert heading.visual.text_color is not None
     assert heading.render_hints.available_width_px == 200
     assert heading.render_hints.available_height_px == 60
+    assert heading.render_hints.original_char_count == len("Новая коллекция")
+    assert heading.render_hints.translated_char_count == len("New Collection")
+    assert heading.render_hints.length_ratio == pytest.approx(
+        len("New Collection") / len("Новая коллекция")
+    )
+    assert heading.render_hints.max_line_count == max(
+        heading.render_hints.target_line_count,
+        heading.render_hints.estimated_lines,
+    )
+    assert heading.background is not None
+    assert heading.background.dominant_color == heading.visual.background_color
+    assert heading.background.background_type == "unknown"
     assert heading.review.requires_review is True
     assert "decorative_text" in heading.review.reasons
     assert heading.review.user_confirmed is None

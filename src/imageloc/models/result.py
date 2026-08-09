@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from imageloc.models.raw_blocks import RawVisionBlock
 from imageloc.models.text_block import TextBlock
 
-CONTRACT_VERSION = "1.1"
+CONTRACT_VERSION = "1.2"
 
 
 class SourceImage(BaseModel):
