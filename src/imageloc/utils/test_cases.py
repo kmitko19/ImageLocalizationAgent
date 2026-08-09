@@ -26,6 +26,8 @@ class CaseStatus(str, Enum):
 
 @dataclass(frozen=True)
 class TestCaseSpec:
+    __test__ = False
+
     case_id: str
     acceptance_path: Path
     acceptance: dict[str, Any]
@@ -47,6 +49,9 @@ def test_cases_dir(settings_paths_test_cases_dir: Path | None = None) -> Path:
     if settings_paths_test_cases_dir is not None:
         return settings_paths_test_cases_dir
     return PROJECT_ROOT / "data" / "input" / "test_cases"
+
+
+test_cases_dir.__test__ = False
 
 
 def acceptance_dir(test_cases_root: Path | None = None) -> Path:

@@ -184,7 +184,12 @@ def test_full_pipeline_from_image_to_json(mock_reader_cls: MagicMock, tmp_path):
     )
     assert heading.background is not None
     assert heading.background.dominant_color == heading.visual.background_color
-    assert heading.background.background_type == "unknown"
+    assert heading.background.background_type in {"solid", "unknown"}
+    if heading.background.background_type == "solid":
+        assert heading.background.classification_confidence >= 0.75
+        assert heading.background.preferred_restore_method == "fill"
+        assert heading.background.inpaint_required is False
+    assert heading.visual.text_transform in {"normal", "uppercase", "lowercase"}
     assert heading.review.requires_review is True
     assert "decorative_text" in heading.review.reasons
     assert heading.review.user_confirmed is None

@@ -122,7 +122,7 @@ def test_analyze_fused_block_returns_visual_and_render_hints():
     )
     image = _make_text_on_background_image()
 
-    visual, hints = va.analyze_fused_block(
+    visual, hints, background = va.analyze_fused_block(
         image,
         fused,
         font_category="heading",
@@ -132,6 +132,7 @@ def test_analyze_fused_block_returns_visual_and_render_hints():
     assert visual.estimated_text_height_px == 40
     assert hints.available_width_px == 100
     assert hints.available_height_px == 40
+    assert background is not None
 
 
 def test_analyze_visual_style_uses_mocked_color_sampler(monkeypatch):

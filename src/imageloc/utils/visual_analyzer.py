@@ -16,7 +16,9 @@ from PIL import Image
 
 from imageloc.fusion.ocr_vision_fusion import FusedBlock
 from imageloc.models.raw_blocks import BoundingBox, Point
-from imageloc.models.text_block import RenderHints, VisualStyle
+from imageloc.models.text_block import BackgroundInfo, RenderHints, VisualStyle
+from imageloc.utils.background_analyzer import analyze_background
+from imageloc.utils.visual_typography import detect_text_transform
 
 DECORATIVE_FONT_KEYWORDS = ("script", "decorative", "handwritten", "calligraphy")
 DEFAULT_FONT_SIZE_RATIO = 0.75
@@ -118,6 +120,7 @@ def analyze_visual_style(
     bbox: BoundingBox,
     polygon: list[Point],
     *,
+    original_text: str = "",
     font_category: str | None = None,
     font_style: str | None = None,
     font_weight: str | None = None,
@@ -140,6 +143,8 @@ def analyze_visual_style(
         font_weight=font_weight,
         alignment=alignment,
         rotation_deg=_rotation_from_polygon(polygon),
+        text_transform=detect_text_transform(original_text),
+        text_opacity=None,
     )
 
 
@@ -164,16 +169,23 @@ def analyze_fused_block(
     font_style: str | None = None,
     font_weight: str | None = None,
     alignment: str | None = None,
-) -> tuple[VisualStyle, RenderHints]:
-    """Analyze one fused block and return visual style + render hints."""
+) -> tuple[VisualStyle, RenderHints, BackgroundInfo | None]:
+    """Analyze one fused block and return visual style, render hints, and background."""
     visual = analyze_visual_style(
         image,
         block.bbox,
         block.polygon,
+        original_text=block.text,
         font_category=font_category,
         font_style=font_style,
         font_weight=font_weight,
         alignment=alignment,
     )
     render_hints = compute_render_hints(block.bbox, block.text, visual)
-    return visual, render_hints
+    rgb_array = np.array(image.convert("RGB"))
+    background = analyze_background(
+        rgb_array,
+        block.bbox,
+        dominant_color_hint=visual.background_color,
+    )
+    return visual, render_hints, background

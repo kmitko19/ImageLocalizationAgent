@@ -15,7 +15,7 @@ from imageloc.config import FusionSettings
 from imageloc.fusion.ocr_vision_fusion import FusedBlock, fuse
 from imageloc.models.raw_blocks import RawVisionBlock
 from imageloc.models.result import PipelineResult, Stats
-from imageloc.models.text_block import RenderHints, ReviewInfo, TextBlock, VisualStyle
+from imageloc.models.text_block import RenderHints, ReviewInfo, TextBlock, VisualStyle, BackgroundInfo
 from imageloc.providers.base import OCRProvider, VisionProvider
 from imageloc.providers.openai_translation_provider import (
     OpenAITranslationProvider,
@@ -58,11 +58,11 @@ class PipelineOrchestrator:
 
         vision_by_block_id = _index_vision_blocks(vision_blocks)
 
-        analyzed_blocks: list[tuple[FusedBlock, VisualStyle, RenderHints, bool]] = []
+        analyzed_blocks: list[tuple[FusedBlock, VisualStyle, RenderHints, BackgroundInfo | None, bool]] = []
         for fused in fusion_result.fused_blocks:
             vision_raw = vision_by_block_id.get(fused.id)
             fused, skip_translation = mark_obvious_non_text(fused, vision_raw)
-            visual, render_hints = analyze_fused_block(
+            visual, render_hints, background_info = analyze_fused_block(
                 loaded.image,
                 fused,
                 font_category=vision_raw.font_category if vision_raw else None,
@@ -70,12 +70,12 @@ class PipelineOrchestrator:
                 font_weight=vision_raw.font_weight if vision_raw else None,
                 alignment=vision_raw.alignment if vision_raw else None,
             )
-            analyzed_blocks.append((fused, visual, render_hints, skip_translation))
+            analyzed_blocks.append((fused, visual, render_hints, background_info, skip_translation))
 
         translation_details = self.translation_provider.translate_fused_blocks(
             [
                 (fused, render_hints)
-                for fused, _, render_hints, skip_translation in analyzed_blocks
+                for fused, _, render_hints, _, skip_translation in analyzed_blocks
                 if not skip_translation
             ],
             target_lang=target_language,
@@ -91,9 +91,10 @@ class PipelineOrchestrator:
                     render_hints=render_hints,
                     translation=translation_by_id.get(fused.id),
                     skip_translation=skip_translation,
+                    background=background_info,
                 )
             )
-            for fused, visual, render_hints, skip_translation in analyzed_blocks
+            for fused, visual, render_hints, background_info, skip_translation in analyzed_blocks
         ]
 
         resolved_source_language = source_language or _detect_source_language(fusion_result.fused_blocks)
@@ -173,6 +174,7 @@ def _build_text_block(
     render_hints: RenderHints,
     translation: TranslationResultDetail | None,
     skip_translation: bool = False,
+    background: BackgroundInfo | None = None,
 ) -> TextBlock:
     return TextBlock(
         id=fused.id,
@@ -191,6 +193,7 @@ def _build_text_block(
         visual=visual,
         render_hints=render_hints,
         review=_finalize_review(fused.review),
+        background=background,
     )
 
 
