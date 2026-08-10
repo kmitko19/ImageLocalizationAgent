@@ -13,6 +13,11 @@ from imageloc.config import PROJECT_ROOT
 from imageloc.models.raw_blocks import BoundingBox
 from imageloc.models.text_block import TextBlock
 from imageloc.renderer.background_restorer import BackgroundRestoreResult, restore_backgrounds
+from imageloc.renderer.text_effects import (
+    TextLayoutContext,
+    apply_text_effects,
+    render_glyph_alpha_mask,
+)
 
 FONT_MIN_SIZE_PX = 6
 FONT_MAX_SIZE_PX = 256
@@ -97,6 +102,10 @@ class TextRenderResult:
     fitted_width_px: float | None = None
     fitted_height_px: float | None = None
     failure_reason: str | None = None
+    applied_rotation: float | None = None
+    perspective_applied: bool = False
+    shadow_applied: bool = False
+    gradient_applied: bool = False
     warnings: list[str] = field(default_factory=list)
 
 
@@ -303,8 +312,6 @@ def _fallback_text_color(image: Image.Image, bbox: BoundingBox) -> tuple[int, in
 
 def _resolve_text_color(image: Image.Image, block: TextBlock) -> tuple[tuple[int, int, int], list[str]]:
     warnings: list[str] = []
-    if block.visual.fill_type == "gradient":
-        warnings.append("gradient text fill not supported; using solid text_color")
     rgb = _hex_to_rgb(block.visual.text_color)
     if rgb is not None:
         return rgb, warnings
@@ -840,28 +847,17 @@ def _draw_line(
         cursor += float(draw.textlength(char, font=font)) + letter_spacing_px
 
 
-def _render_block_layer(
+def _compute_text_layout(
     block: TextBlock,
     *,
     font_path: str,
     font_size_px: int,
     lines: list[str],
-    text_color: tuple[int, int, int],
     content_box: BoundingBox,
     letter_spacing_px: float,
     line_height_ratio: float,
     stroke_width: float,
-    stroke_color: tuple[int, int, int] | None,
-    rotation_deg: float,
-) -> Image.Image:
-    bbox = block.bbox
-    opacity = block.visual.text_opacity
-    alpha = 255 if opacity is None else int(max(0, min(1.0, opacity)) * 255)
-    fill = (*text_color, alpha)
-    stroke_fill = (*stroke_color, alpha) if stroke_color is not None else None
-
-    layer = Image.new("RGBA", (bbox.width, bbox.height), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(layer)
+) -> TextLayoutContext:
     font = ImageFont.truetype(font_path, font_size_px)
     line_height = _line_height_px(font, line_height_ratio)
     block_height = _block_ink_height(
@@ -871,8 +867,6 @@ def _render_block_layer(
         stroke_width=stroke_width,
     )
     first_box = font.getbbox(lines[0]) if lines else (0, 0, 0, 0)
-
-    horizontal = _normalize_horizontal_alignment(block.visual.alignment)
     vertical = _normalize_vertical_alignment(block.visual.vertical_alignment)
 
     if vertical == "top":
@@ -882,48 +876,51 @@ def _render_block_layer(
     else:
         y_start = content_box.y + max(0.0, (content_box.height - block_height) / 2.0) - first_box[1]
 
-    for index, line in enumerate(lines):
-        line_width = _measure_line(
-            draw,
-            line,
-            font,
-            letter_spacing_px=letter_spacing_px,
-            stroke_width=stroke_width,
-        )
-        if horizontal == "left":
-            x = float(content_box.x)
-        elif horizontal == "right":
-            x = float(content_box.x) + max(0.0, content_box.width - line_width)
-        else:
-            x = float(content_box.x) + max(0.0, (content_box.width - line_width) / 2.0)
-        y = y_start + index * line_height
-        _draw_line(
-            draw,
-            line,
-            x,
-            y,
-            font,
-            fill=fill,
-            letter_spacing_px=letter_spacing_px,
-            stroke_width=stroke_width,
-            stroke_fill=stroke_fill,
-        )
-
-    if abs(rotation_deg) > 0.01:
-        layer = layer.rotate(
-            -rotation_deg,
-            resample=Image.Resampling.BICUBIC,
-            expand=False,
-            center=(bbox.width / 2.0, bbox.height / 2.0),
-        )
-    return layer
+    return TextLayoutContext(
+        font_path=font_path,
+        font_size_px=font_size_px,
+        lines=lines,
+        content_box=content_box,
+        letter_spacing_px=letter_spacing_px,
+        line_height_px=line_height,
+        y_start=y_start,
+        horizontal=_normalize_horizontal_alignment(block.visual.alignment),
+        block_height=block_height,
+    )
 
 
-def _paste_layer_into_image(base: Image.Image, layer: Image.Image, bbox: BoundingBox) -> Image.Image:
+def _paste_layer_into_image(
+    base: Image.Image,
+    layer: Image.Image,
+    bbox: BoundingBox,
+    *,
+    paste_offset: tuple[int, int] = (0, 0),
+) -> Image.Image:
+    """Alpha-composite a local layer onto the image at bbox origin plus optional offset."""
     working = base.convert("RGBA") if base.mode != "RGBA" else base.copy()
-    region = working.crop((bbox.x, bbox.y, bbox.x + bbox.width, bbox.y + bbox.height))
-    composited = Image.alpha_composite(region, layer)
-    working.paste(composited, (bbox.x, bbox.y))
+    paste_x = bbox.x + paste_offset[0]
+    paste_y = bbox.y + paste_offset[1]
+
+    if paste_offset == (0, 0) and layer.size == (bbox.width, bbox.height):
+        region = working.crop((bbox.x, bbox.y, bbox.x + bbox.width, bbox.y + bbox.height))
+        composited = Image.alpha_composite(region, layer)
+        working.paste(composited, (bbox.x, bbox.y))
+    else:
+        image_width, image_height = working.size
+        dest_x1 = max(0, paste_x)
+        dest_y1 = max(0, paste_y)
+        dest_x2 = min(image_width, paste_x + layer.width)
+        dest_y2 = min(image_height, paste_y + layer.height)
+        if dest_x1 < dest_x2 and dest_y1 < dest_y2:
+            src_x1 = dest_x1 - paste_x
+            src_y1 = dest_y1 - paste_y
+            src_x2 = src_x1 + (dest_x2 - dest_x1)
+            src_y2 = src_y1 + (dest_y2 - dest_y1)
+            layer_crop = layer.crop((src_x1, src_y1, src_x2, src_y2))
+            base_crop = working.crop((dest_x1, dest_y1, dest_x2, dest_y2))
+            composited = Image.alpha_composite(base_crop, layer_crop)
+            working.paste(composited, (dest_x1, dest_y1))
+
     if base.mode == "RGBA":
         return working
     return working.convert("RGB")
@@ -943,9 +940,6 @@ def render_text_block(
             block_id=block.id,
             warnings=["empty translated_text; skipped"],
         )
-
-    if block.render_geometry and block.render_geometry.perspective_detected:
-        warnings.append("perspective detected; rendering without perspective warp")
 
     font_path, font_warnings = resolve_font(block)
     warnings.extend(font_warnings)
@@ -1010,20 +1004,36 @@ def render_text_block(
 
     ratio = _resolve_line_height_ratio(block, ImageFont.truetype(font_path, font_size_px))
     rotation_deg = float(block.visual.rotation_deg or 0.0)
-    layer = _render_block_layer(
+    text_opacity = 255 if block.visual.text_opacity is None else int(max(0, min(1.0, block.visual.text_opacity)) * 255)
+
+    layout = _compute_text_layout(
         block,
         font_path=font_path,
         font_size_px=font_size_px,
         lines=lines,
-        text_color=text_color,
         content_box=content_box,
         letter_spacing_px=letter_spacing_px,
         line_height_ratio=ratio,
         stroke_width=stroke_width,
-        stroke_color=stroke_color,
-        rotation_deg=rotation_deg,
     )
-    rendered = _paste_layer_into_image(image, layer, block.bbox)
+    alpha_mask = render_glyph_alpha_mask(block, layout)
+    effect_result = apply_text_effects(
+        alpha_mask,
+        block,
+        layout,
+        text_color=text_color,
+        text_opacity=text_opacity,
+        rotation_deg=rotation_deg,
+        stroke_width=stroke_width,
+        stroke_color=stroke_color,
+    )
+    warnings.extend(effect_result.warnings)
+    rendered = _paste_layer_into_image(
+        image,
+        effect_result.layer,
+        block.bbox,
+        paste_offset=effect_result.paste_offset,
+    )
     return TextRenderResult(
         image=rendered,
         success=True,
@@ -1036,6 +1046,10 @@ def render_text_block(
         content_padding_px=padding_px,
         fitted_width_px=fitted_width,
         fitted_height_px=fitted_height,
+        applied_rotation=effect_result.applied_rotation,
+        perspective_applied=effect_result.perspective_applied,
+        shadow_applied=effect_result.shadow_applied,
+        gradient_applied=effect_result.gradient_applied,
         warnings=warnings,
     )
 
