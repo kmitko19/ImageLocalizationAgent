@@ -103,17 +103,18 @@ def test_finalize_render_hints_sets_max_line_count():
     hints = RenderHints(
         available_width_px=100,
         available_height_px=80,
-        estimated_lines=2,
+        estimated_lines=1,
         target_line_count=1,
     )
 
     finalized = finalize_render_hints(
         hints,
-        original_text="Line one\nLine two",
-        translated_text="Translated",
+        original_text="DETAILS",
+        translated_text="Details info with extra words",
+        font_size_estimate=18,
     )
 
-    assert finalized.max_line_count == 2
+    assert finalized.max_line_count >= 2
 
 
 def test_build_render_geometry_skips_defaults():

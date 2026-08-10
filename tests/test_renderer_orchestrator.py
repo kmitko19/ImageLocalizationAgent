@@ -251,7 +251,8 @@ def test_warnings_aggregated():
     bbox = BoundingBox(x=20, y=20, width=100, height=40)
     block = _block(block_id="warn_block", bbox=bbox, translated_text="")
     result = render_image_localization(_blank_image(), [block])
-    assert any("render[warn_block]" in warning for warning in result.warnings)
+    assert any("diagnostic[warn_block]" in warning for warning in result.block_results[0].warnings)
+    assert not any("render[warn_block]" in warning for warning in result.warnings)
 
 
 def test_failed_block_ids():
@@ -532,7 +533,9 @@ def test_block_level_failure_has_controlled_result():
         hints=RenderHints(available_width_px=50, available_height_px=18, max_line_count=1, font_scale_min=0.95),
         visual=VisualStyle(text_color="#000000", font_size_estimate=18, estimated_text_height_px=16),
     )
-    result = render_image_localization(_blank_image(size=(160, 100)), [block])
+    mask = np.zeros((18, 50), dtype=np.uint8)
+    mask[4:14, 8:42] = MASK_FOREGROUND_VALUE
+    result = render_image_localization(_blank_image(size=(160, 100)), [block], masks={"controlled_fail": mask})
     assert result.success is True
     assert result.block_results[0].status == BLOCK_STATUS_FAILED
     assert result.block_results[0].failure_reason == "text_does_not_fit_at_minimum_font_size"

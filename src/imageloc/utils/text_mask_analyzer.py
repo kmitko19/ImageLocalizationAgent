@@ -514,6 +514,27 @@ def _local_background_variance_penalty(
     return 1.0 - ((color_std - 8.0) / 32.0) * 0.45
 
 
+def _solid_contrast_confidence_floor(
+    visual: VisualStyle,
+    background: BackgroundInfo | None,
+    mask: np.ndarray,
+) -> float | None:
+    """Raise confidence floor for high-contrast text on classified solid backgrounds."""
+    if background is None or background.background_type != "solid" or not mask.any():
+        return None
+    text_rgb = _hex_to_rgb(visual.text_color)
+    bg_rgb = _hex_to_rgb(visual.background_color)
+    if text_rgb is None or bg_rgb is None:
+        return None
+    color_distance = float(np.linalg.norm(np.array(text_rgb, dtype=np.float32) - np.array(bg_rgb, dtype=np.float32)))
+    if color_distance < 80.0:
+        return None
+    coverage_ratio = float(np.count_nonzero(mask)) / float(max(1, mask.size))
+    if coverage_ratio <= 0.0 or coverage_ratio >= COVERAGE_SUSPICIOUS_HIGH:
+        return None
+    return 0.5
+
+
 def _compute_mask_confidence(
     *,
     mask: np.ndarray,
@@ -524,6 +545,7 @@ def _compute_mask_confidence(
     bbox_area: int,
     background: BackgroundInfo | None,
     patch: np.ndarray,
+    visual: VisualStyle,
 ) -> float:
     base_confidence = (
         _contrast_score(color_distance, mask, search_mask) * 0.30
@@ -537,6 +559,9 @@ def _compute_mask_confidence(
         * _background_complexity_penalty(background)
         * _local_background_variance_penalty(patch, search_mask, mask)
     )
+    floor = _solid_contrast_confidence_floor(visual, background, mask)
+    if floor is not None:
+        confidence = max(confidence, floor)
     return round(min(max(confidence, 0.0), 1.0), 3)
 
 
@@ -583,6 +608,7 @@ def analyze_text_mask(
         bbox_area=bbox_area,
         background=background,
         patch=patch,
+        visual=visual,
     )
 
     return TextMaskAnalysis(

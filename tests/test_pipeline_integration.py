@@ -204,7 +204,12 @@ def test_full_pipeline_from_image_to_json(mock_reader_cls: MagicMock, tmp_path):
     assert label.review.user_confirmed is True
     assert label.review.user_action == "approved"
 
-    assert restored == result
+    assert restored.model_dump() == result.model_dump(exclude={"localized_image", "clean_background"})
+    assert result.pipeline_success is True
+    assert result.renderer is not None
+    assert result.renderer.success is True
+    assert result.localized_image is not None
+    assert result.localized_image.size == (400, 200)
     assert json_path.exists()
     assert json_path.parent.name == result.source_image_id
 

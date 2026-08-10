@@ -222,6 +222,11 @@ def _classify_background(
         confidence = min(0.95, 0.75 + (SOLID_MAX_COLOR_STD - color_std) / 40.0)
         return "solid", round(confidence, 3)
 
+    # Anti-aliased text near the bbox can inflate edge density on otherwise flat fills.
+    if color_std <= 14.0 and edge_density <= 0.12 and unique_color_ratio <= 0.18:
+        confidence = min(0.88, 0.62 + (14.0 - color_std) / 35.0)
+        return "solid", round(confidence, 3)
+
     if (
         gradient_correlation >= GRADIENT_MIN_CORRELATION
         and color_std <= GRADIENT_MAX_COLOR_STD
