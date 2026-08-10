@@ -9,6 +9,8 @@ from imageloc.renderer.background_restorer import (
 )
 from imageloc.renderer.text_renderer import (
     TextRenderResult,
+    compute_content_box,
+    compute_content_padding_px,
     render_localized_image,
     render_text_block,
     render_text_blocks,
@@ -21,6 +23,8 @@ from imageloc.renderer.text_renderer import (
 __all__ = [
     "BackgroundRestoreResult",
     "TextRenderResult",
+    "compute_content_box",
+    "compute_content_padding_px",
     "render_localized_image",
     "render_text_block",
     "render_text_blocks",

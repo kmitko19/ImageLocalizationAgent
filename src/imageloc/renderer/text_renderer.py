@@ -1,4 +1,4 @@
-"""Deterministic translated text rendering for Renderer R0.4."""
+"""Deterministic translated text rendering for Renderer R0.4/R0.5."""
 
 from __future__ import annotations
 
@@ -19,9 +19,16 @@ FONT_MAX_SIZE_PX = 256
 FONT_SIZE_SEARCH_MAX_ITERATIONS = 16
 STROKE_MIN_CONFIDENCE = 0.5
 DEFAULT_LINE_HEIGHT_RATIO = 1.2
+LINE_HEIGHT_CONFIDENCE_MIN = 0.4
 DEFAULT_HORIZONTAL_ALIGNMENT = "center"
 DEFAULT_VERTICAL_ALIGNMENT = "center"
 LOCALIZED_IMAGE_FILENAME = "localized_image.png"
+
+CONTENT_PADDING_MIN_PX = 2
+CONTENT_PADDING_MAX_PX = 16
+CONTENT_PADDING_BBOX_RATIO = 0.06
+CONTENT_PADDING_FONT_RATIO = 0.18
+CONTENT_MIN_INNER_PX = 8
 
 WINDOWS_FONTS_DIR = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts"
 
@@ -85,6 +92,11 @@ class TextRenderResult:
     font_size_px: int | None = None
     rendered_lines: list[str] = field(default_factory=list)
     rendered_bbox: BoundingBox | None = None
+    content_bbox: BoundingBox | None = None
+    content_padding_px: int = 0
+    fitted_width_px: float | None = None
+    fitted_height_px: float | None = None
+    failure_reason: str | None = None
     warnings: list[str] = field(default_factory=list)
 
 
@@ -134,6 +146,43 @@ def _normalize_style(value: str | None) -> str:
     if normalized in {"italic", "oblique"}:
         return "italic"
     return "normal"
+
+
+def compute_content_padding_px(block: TextBlock) -> int:
+    """Compute deterministic inner padding for a text block bbox."""
+    bbox = block.bbox
+    visual = block.visual
+    hints = block.render_hints
+    outer_w = min(bbox.width, hints.available_width_px)
+    outer_h = min(bbox.height, hints.available_height_px)
+    font_hint = visual.font_size_estimate or visual.estimated_text_height_px or min(outer_w, outer_h)
+    from_bbox = int(round(min(outer_w, outer_h) * CONTENT_PADDING_BBOX_RATIO))
+    from_font = int(round(max(1, font_hint) * CONTENT_PADDING_FONT_RATIO))
+
+    compact = min(outer_w, outer_h) < 56
+    if compact:
+        padding = max(CONTENT_PADDING_MIN_PX, min(from_bbox, from_font))
+    else:
+        padding = max(from_bbox, from_font, CONTENT_PADDING_MIN_PX)
+    padding = min(padding, CONTENT_PADDING_MAX_PX)
+
+    max_pad_x = max(0, (outer_w - CONTENT_MIN_INNER_PX) // 2)
+    max_pad_y = max(0, (outer_h - CONTENT_MIN_INNER_PX) // 2)
+    if max_pad_x == 0 or max_pad_y == 0:
+        return 0
+    return min(padding, max_pad_x, max_pad_y)
+
+
+def compute_content_box(block: TextBlock) -> tuple[int, BoundingBox]:
+    """Return padding and inner content box in local bbox coordinates."""
+    padding = compute_content_padding_px(block)
+    bbox = block.bbox
+    hints = block.render_hints
+    outer_w = min(bbox.width, hints.available_width_px)
+    outer_h = min(bbox.height, hints.available_height_px)
+    inner_w = max(1, outer_w - 2 * padding)
+    inner_h = max(1, outer_h - 2 * padding)
+    return padding, BoundingBox(x=padding, y=padding, width=inner_w, height=inner_h)
 
 
 def _font_file_exists(filename: str) -> bool:
@@ -263,9 +312,26 @@ def _resolve_text_color(image: Image.Image, block: TextBlock) -> tuple[tuple[int
     return _fallback_text_color(image, block.bbox), warnings
 
 
+def _resolve_line_height_ratio(block: TextBlock, font: ImageFont.FreeTypeFont | None = None) -> float:
+    visual = block.visual
+    if visual.line_height_ratio is not None and visual.line_height_confidence >= LINE_HEIGHT_CONFIDENCE_MIN:
+        return max(0.8, min(2.5, float(visual.line_height_ratio)))
+    if font is not None:
+        ascent, descent = font.getmetrics()
+        if ascent + descent > 0:
+            return DEFAULT_LINE_HEIGHT_RATIO
+    return DEFAULT_LINE_HEIGHT_RATIO
+
+
 def _line_height_px(font: ImageFont.FreeTypeFont, line_height_ratio: float) -> int:
     ascent, descent = font.getmetrics()
     return max(1, int(round((ascent + descent) * line_height_ratio)))
+
+
+def _stroke_margin_px(stroke_width: float) -> float:
+    if stroke_width <= 0:
+        return 0.0
+    return float(stroke_width)
 
 
 def _measure_line(
@@ -274,17 +340,19 @@ def _measure_line(
     font: ImageFont.FreeTypeFont,
     *,
     letter_spacing_px: float = 0.0,
+    stroke_width: float = 0.0,
 ) -> float:
     if not line:
         return 0.0
     if letter_spacing_px <= 0:
-        return float(draw.textlength(line, font=font))
-    width = 0.0
-    for index, char in enumerate(line):
-        width += float(draw.textlength(char, font=font))
-        if index < len(line) - 1:
-            width += letter_spacing_px
-    return width
+        width = float(draw.textlength(line, font=font))
+    else:
+        width = 0.0
+        for index, char in enumerate(line):
+            width += float(draw.textlength(char, font=font))
+            if index < len(line) - 1:
+                width += letter_spacing_px
+    return width + _stroke_margin_px(stroke_width) * 2.0
 
 
 def _split_long_word(
@@ -294,12 +362,23 @@ def _split_long_word(
     max_width: float,
     *,
     letter_spacing_px: float = 0.0,
+    stroke_width: float = 0.0,
 ) -> list[str]:
     parts: list[str] = []
     current = ""
     for char in word:
         candidate = current + char
-        if _measure_line(draw, candidate, font, letter_spacing_px=letter_spacing_px) <= max_width or not current:
+        if (
+            _measure_line(
+                draw,
+                candidate,
+                font,
+                letter_spacing_px=letter_spacing_px,
+                stroke_width=stroke_width,
+            )
+            <= max_width
+            or not current
+        ):
             current = candidate
         else:
             parts.append(current)
@@ -309,28 +388,61 @@ def _split_long_word(
     return parts or [word[:1]]
 
 
-def wrap_text_lines(
-    text: str,
+def _score_line_layout(
+    lines: list[str],
+    draw: ImageDraw.ImageDraw,
     font: ImageFont.FreeTypeFont,
     *,
-    max_width: int,
-    max_line_count: int | None,
+    max_width: float,
     letter_spacing_px: float = 0.0,
+    stroke_width: float = 0.0,
+) -> float:
+    if not lines:
+        return float("inf")
+    widths = [
+        _measure_line(
+            draw,
+            line,
+            font,
+            letter_spacing_px=letter_spacing_px,
+            stroke_width=stroke_width,
+        )
+        for line in lines
+    ]
+    if any(width > max_width for width in widths):
+        return float("inf")
+    average = sum(widths) / len(widths)
+    variance = sum((width - average) ** 2 for width in widths) / len(widths)
+    short_last = 0.0
+    if len(widths) > 1 and widths[-1] < average * 0.55:
+        short_last = (average * 0.55 - widths[-1]) ** 2
+    return variance + short_last + len(lines) * 0.05
+
+
+def _wrap_greedy(
+    words: list[str],
+    draw: ImageDraw.ImageDraw,
+    font: ImageFont.FreeTypeFont,
+    *,
+    max_width: float,
+    max_lines: int,
+    letter_spacing_px: float,
+    stroke_width: float,
 ) -> list[str]:
-    """Wrap text deterministically using measured glyph widths."""
-    probe = Image.new("RGBA", (4, 4), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(probe)
-    max_lines = max_line_count if max_line_count and max_line_count > 0 else 10_000
-    words = text.split()
     lines: list[str] = []
-
-    if not words:
-        return lines
-
     current = ""
     for word in words:
         candidate = word if not current else f"{current} {word}"
-        if _measure_line(draw, candidate, font, letter_spacing_px=letter_spacing_px) <= max_width:
+        if (
+            _measure_line(
+                draw,
+                candidate,
+                font,
+                letter_spacing_px=letter_spacing_px,
+                stroke_width=stroke_width,
+            )
+            <= max_width
+        ):
             current = candidate
             continue
 
@@ -343,8 +455,9 @@ def wrap_text_lines(
                     word,
                     draw,
                     font,
-                    float(max_width),
+                    max_width,
                     letter_spacing_px=letter_spacing_px,
+                    stroke_width=stroke_width,
                 )
             )
             current = ""
@@ -353,15 +466,25 @@ def wrap_text_lines(
             break
 
     if current and len(lines) < max_lines:
-        if _measure_line(draw, current, font, letter_spacing_px=letter_spacing_px) <= max_width:
+        if (
+            _measure_line(
+                draw,
+                current,
+                font,
+                letter_spacing_px=letter_spacing_px,
+                stroke_width=stroke_width,
+            )
+            <= max_width
+        ):
             lines.append(current)
         else:
             for part in _split_long_word(
                 current,
                 draw,
                 font,
-                float(max_width),
+                max_width,
                 letter_spacing_px=letter_spacing_px,
+                stroke_width=stroke_width,
             ):
                 if len(lines) >= max_lines:
                     break
@@ -370,21 +493,192 @@ def wrap_text_lines(
     return lines[:max_lines]
 
 
+def _wrap_balanced(
+    words: list[str],
+    draw: ImageDraw.ImageDraw,
+    font: ImageFont.FreeTypeFont,
+    *,
+    max_width: float,
+    max_lines: int,
+    letter_spacing_px: float,
+    stroke_width: float,
+) -> list[str]:
+    word_count = len(words)
+    if word_count == 0:
+        return []
+
+    best_lines: list[str] | None = None
+    best_score = float("inf")
+    target_width = max_width * 0.72
+
+    for line_count in range(1, min(max_lines, word_count) + 1):
+        dp_score = [float("inf")] * (word_count + 1)
+        dp_prev = [-1] * (word_count + 1)
+        dp_lines = [0] * (word_count + 1)
+        dp_score[0] = 0.0
+
+        for start in range(word_count):
+            if dp_score[start] == float("inf"):
+                continue
+            if dp_lines[start] >= line_count:
+                continue
+            for end in range(start + 1, word_count + 1):
+                if dp_lines[start] + 1 > line_count:
+                    break
+                line = " ".join(words[start:end])
+                line_width = _measure_line(
+                    draw,
+                    line,
+                    font,
+                    letter_spacing_px=letter_spacing_px,
+                    stroke_width=stroke_width,
+                )
+                if line_width > max_width:
+                    break
+                segment_cost = (line_width - target_width) ** 2
+                total = dp_score[start] + segment_cost
+                if total < dp_score[end]:
+                    dp_score[end] = total
+                    dp_prev[end] = start
+                    dp_lines[end] = dp_lines[start] + 1
+
+        if dp_score[word_count] == float("inf"):
+            continue
+
+        lines: list[str] = []
+        index = word_count
+        while index > 0:
+            start = dp_prev[index]
+            if start < 0:
+                lines = []
+                break
+            lines.append(" ".join(words[start:index]))
+            index = start
+        if not lines:
+            continue
+        lines.reverse()
+        score = _score_line_layout(
+            lines,
+            draw,
+            font,
+            max_width=max_width,
+            letter_spacing_px=letter_spacing_px,
+            stroke_width=stroke_width,
+        )
+        if score < best_score:
+            best_score = score
+            best_lines = lines
+
+    if best_lines is not None:
+        return best_lines
+    return _wrap_greedy(
+        words,
+        draw,
+        font,
+        max_width=max_width,
+        max_lines=max_lines,
+        letter_spacing_px=letter_spacing_px,
+        stroke_width=stroke_width,
+    )
+
+
+def wrap_text_lines(
+    text: str,
+    font: ImageFont.FreeTypeFont,
+    *,
+    max_width: int,
+    max_line_count: int | None,
+    letter_spacing_px: float = 0.0,
+    stroke_width: float = 0.0,
+) -> list[str]:
+    """Wrap text deterministically using measured glyph widths and balanced scoring."""
+    probe = Image.new("RGBA", (4, 4), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(probe)
+    max_lines = max_line_count if max_line_count and max_line_count > 0 else 10_000
+    words = text.split()
+    if not words:
+        return []
+
+    if len(words) == 1:
+        word = words[0]
+        if (
+            _measure_line(
+                draw,
+                word,
+                font,
+                letter_spacing_px=letter_spacing_px,
+                stroke_width=stroke_width,
+            )
+            <= max_width
+        ):
+            return [word]
+        return _split_long_word(
+            word,
+            draw,
+            font,
+            float(max_width),
+            letter_spacing_px=letter_spacing_px,
+            stroke_width=stroke_width,
+        )[:max_lines]
+
+    return _wrap_balanced(
+        words,
+        draw,
+        font,
+        max_width=float(max_width),
+        max_lines=max_lines,
+        letter_spacing_px=letter_spacing_px,
+        stroke_width=stroke_width,
+    )
+
+
+def _text_fully_represented(source: str, lines: list[str]) -> bool:
+    rendered = "".join(lines).replace(" ", "")
+    return rendered == source.replace(" ", "")
+
+
+def _block_ink_height(
+    lines: list[str],
+    font: ImageFont.FreeTypeFont,
+    *,
+    line_height: int,
+    stroke_width: float = 0.0,
+) -> float:
+    if not lines:
+        return 0.0
+    stroke_margin = _stroke_margin_px(stroke_width)
+    first_box = font.getbbox(lines[0])
+    if len(lines) == 1:
+        return float(first_box[3] - first_box[1]) + stroke_margin * 2.0
+    last_box = font.getbbox(lines[-1])
+    return float((len(lines) - 1) * line_height + last_box[3] - first_box[1]) + stroke_margin * 2.0
+
+
 def _measure_text_block(
     lines: list[str],
     font: ImageFont.FreeTypeFont,
     *,
     letter_spacing_px: float = 0.0,
     line_height_ratio: float,
+    stroke_width: float = 0.0,
 ) -> tuple[float, float]:
     probe = Image.new("RGBA", (4, 4), (0, 0, 0, 0))
     draw = ImageDraw.Draw(probe)
     line_height = _line_height_px(font, line_height_ratio)
     max_width = 0.0
     for line in lines:
-        max_width = max(max_width, _measure_line(draw, line, font, letter_spacing_px=letter_spacing_px))
-    total_height = line_height * max(1, len(lines))
-    return max_width, float(total_height)
+        max_width = max(
+            max_width,
+            _measure_line(
+                draw,
+                line,
+                font,
+                letter_spacing_px=letter_spacing_px,
+                stroke_width=stroke_width,
+            ),
+        )
+    total_height = _block_ink_height(lines, font, line_height=line_height, stroke_width=stroke_width)
+    return max_width, total_height
 
 
 def _font_size_bounds(block: TextBlock) -> tuple[int, int]:
@@ -404,19 +698,48 @@ def _font_size_bounds(block: TextBlock) -> tuple[int, int]:
     return min_size, max_size
 
 
+def _layout_fits(
+    lines: list[str],
+    font: ImageFont.FreeTypeFont,
+    *,
+    source_text: str,
+    content_box: BoundingBox,
+    max_line_count: int | None,
+    letter_spacing_px: float,
+    line_height_ratio: float,
+    stroke_width: float,
+) -> tuple[bool, float, float]:
+    width, height = _measure_text_block(
+        lines,
+        font,
+        letter_spacing_px=letter_spacing_px,
+        line_height_ratio=line_height_ratio,
+        stroke_width=stroke_width,
+    )
+    fits = width <= content_box.width and height <= content_box.height and bool(lines)
+    if max_line_count is not None:
+        fits = fits and len(lines) <= max_line_count
+    fits = fits and _text_fully_represented(source_text, lines)
+    return fits, width, height
+
+
 def fit_font_size_and_lines(
     text: str,
     font_path: str,
     block: TextBlock,
     *,
+    content_box: BoundingBox,
     letter_spacing_px: float = 0.0,
-    line_height_ratio: float = DEFAULT_LINE_HEIGHT_RATIO,
-) -> tuple[int | None, list[str]]:
-    """Binary-search the largest font size that fits inside the block bbox."""
-    min_size, max_size = _font_size_bounds(block)
+    line_height_ratio: float | None = None,
+    stroke_width: float = 0.0,
+) -> tuple[int | None, list[str], float, float]:
+    """Binary-search the largest font size that fits inside the content box."""
     hints = block.render_hints
+    min_size, max_size = _font_size_bounds(block)
     best_size: int | None = None
     best_lines: list[str] = []
+    best_width = 0.0
+    best_height = 0.0
 
     low = min_size
     high = max_size
@@ -425,52 +748,60 @@ def fit_font_size_and_lines(
         iterations += 1
         mid = (low + high) // 2
         font = ImageFont.truetype(font_path, mid)
+        ratio = line_height_ratio if line_height_ratio is not None else _resolve_line_height_ratio(block, font)
         lines = wrap_text_lines(
             text,
             font,
-            max_width=hints.available_width_px,
+            max_width=content_box.width,
             max_line_count=hints.max_line_count,
             letter_spacing_px=letter_spacing_px,
+            stroke_width=stroke_width,
         )
-        width, height = _measure_text_block(
+        fits, width, height = _layout_fits(
             lines,
             font,
+            source_text=text,
+            content_box=content_box,
+            max_line_count=hints.max_line_count,
             letter_spacing_px=letter_spacing_px,
-            line_height_ratio=line_height_ratio,
+            line_height_ratio=ratio,
+            stroke_width=stroke_width,
         )
-        fits = width <= hints.available_width_px and height <= hints.available_height_px
-        if hints.max_line_count is not None:
-            fits = fits and len(lines) <= hints.max_line_count
-        if fits and lines:
+        if fits:
             best_size = mid
             best_lines = lines
+            best_width = width
+            best_height = height
             low = mid + 1
         else:
             high = mid - 1
 
     if best_size is not None:
-        return best_size, best_lines
+        return best_size, best_lines, best_width, best_height
 
     font = ImageFont.truetype(font_path, min_size)
+    ratio = line_height_ratio if line_height_ratio is not None else _resolve_line_height_ratio(block, font)
     lines = wrap_text_lines(
         text,
         font,
-        max_width=hints.available_width_px,
+        max_width=content_box.width,
         max_line_count=hints.max_line_count,
         letter_spacing_px=letter_spacing_px,
+        stroke_width=stroke_width,
     )
-    width, height = _measure_text_block(
+    fits, width, height = _layout_fits(
         lines,
         font,
+        source_text=text,
+        content_box=content_box,
+        max_line_count=hints.max_line_count,
         letter_spacing_px=letter_spacing_px,
-        line_height_ratio=line_height_ratio,
+        line_height_ratio=ratio,
+        stroke_width=stroke_width,
     )
-    fits = width <= hints.available_width_px and height <= hints.available_height_px and bool(lines)
-    if hints.max_line_count is not None:
-        fits = fits and len(lines) <= hints.max_line_count
     if fits:
-        return min_size, lines
-    return None, lines
+        return min_size, lines, width, height
+    return None, lines, width, height
 
 
 def _draw_line(
@@ -516,6 +847,7 @@ def _render_block_layer(
     font_size_px: int,
     lines: list[str],
     text_color: tuple[int, int, int],
+    content_box: BoundingBox,
     letter_spacing_px: float,
     line_height_ratio: float,
     stroke_width: float,
@@ -532,31 +864,38 @@ def _render_block_layer(
     draw = ImageDraw.Draw(layer)
     font = ImageFont.truetype(font_path, font_size_px)
     line_height = _line_height_px(font, line_height_ratio)
-    block_width, block_height = _measure_text_block(
+    block_height = _block_ink_height(
         lines,
         font,
-        letter_spacing_px=letter_spacing_px,
-        line_height_ratio=line_height_ratio,
+        line_height=line_height,
+        stroke_width=stroke_width,
     )
+    first_box = font.getbbox(lines[0]) if lines else (0, 0, 0, 0)
 
     horizontal = _normalize_horizontal_alignment(block.visual.alignment)
     vertical = _normalize_vertical_alignment(block.visual.vertical_alignment)
 
     if vertical == "top":
-        y_start = 0
+        y_start = content_box.y - first_box[1]
     elif vertical == "bottom":
-        y_start = max(0, bbox.height - int(block_height))
+        y_start = content_box.y + max(0.0, content_box.height - block_height) - first_box[1]
     else:
-        y_start = max(0, (bbox.height - int(block_height)) // 2)
+        y_start = content_box.y + max(0.0, (content_box.height - block_height) / 2.0) - first_box[1]
 
     for index, line in enumerate(lines):
-        line_width = _measure_line(draw, line, font, letter_spacing_px=letter_spacing_px)
+        line_width = _measure_line(
+            draw,
+            line,
+            font,
+            letter_spacing_px=letter_spacing_px,
+            stroke_width=stroke_width,
+        )
         if horizontal == "left":
-            x = 0
+            x = float(content_box.x)
         elif horizontal == "right":
-            x = max(0.0, bbox.width - line_width)
+            x = float(content_box.x) + max(0.0, content_box.width - line_width)
         else:
-            x = max(0.0, (bbox.width - line_width) / 2.0)
+            x = float(content_box.x) + max(0.0, (content_box.width - line_width) / 2.0)
         y = y_start + index * line_height
         _draw_line(
             draw,
@@ -615,9 +954,11 @@ def render_text_block(
             image=image.copy(),
             success=False,
             block_id=block.id,
+            failure_reason="font_resolution_failed",
             warnings=warnings,
         )
 
+    padding_px, content_box = compute_content_box(block)
     text = _apply_text_transform(str(translated).strip(), block.visual.text_transform)
     text_color, color_warnings = _resolve_text_color(image, block)
     warnings.extend(color_warnings)
@@ -625,8 +966,6 @@ def render_text_block(
     letter_spacing_px = 0.0
     if block.visual.letter_spacing_px is not None:
         letter_spacing_px = max(0.0, float(block.visual.letter_spacing_px))
-
-    line_height_ratio = block.visual.line_height_ratio or DEFAULT_LINE_HEIGHT_RATIO
 
     stroke_width = 0.0
     stroke_color: tuple[int, int, int] | None = None
@@ -640,14 +979,19 @@ def render_text_block(
             stroke_width = float(block.visual.stroke_width_px)
             stroke_color = parsed_stroke
 
-    font_size_px, lines = fit_font_size_and_lines(
+    line_height_ratio = _resolve_line_height_ratio(block)
+
+    font_size_px, lines, fitted_width, fitted_height = fit_font_size_and_lines(
         text,
         font_path,
         block,
+        content_box=content_box,
         letter_spacing_px=letter_spacing_px,
         line_height_ratio=line_height_ratio,
+        stroke_width=stroke_width,
     )
     if font_size_px is None or not lines:
+        failure_reason = "text_does_not_fit_at_minimum_font_size"
         warnings.append("text does not fit at minimum font size")
         return TextRenderResult(
             image=image.copy(),
@@ -656,9 +1000,15 @@ def render_text_block(
             font_path=font_path,
             rendered_lines=lines,
             rendered_bbox=block.bbox,
+            content_bbox=content_box,
+            content_padding_px=padding_px,
+            fitted_width_px=fitted_width,
+            fitted_height_px=fitted_height,
+            failure_reason=failure_reason,
             warnings=warnings,
         )
 
+    ratio = _resolve_line_height_ratio(block, ImageFont.truetype(font_path, font_size_px))
     rotation_deg = float(block.visual.rotation_deg or 0.0)
     layer = _render_block_layer(
         block,
@@ -666,8 +1016,9 @@ def render_text_block(
         font_size_px=font_size_px,
         lines=lines,
         text_color=text_color,
+        content_box=content_box,
         letter_spacing_px=letter_spacing_px,
-        line_height_ratio=line_height_ratio,
+        line_height_ratio=ratio,
         stroke_width=stroke_width,
         stroke_color=stroke_color,
         rotation_deg=rotation_deg,
@@ -681,6 +1032,10 @@ def render_text_block(
         font_size_px=font_size_px,
         rendered_lines=lines,
         rendered_bbox=block.bbox,
+        content_bbox=content_box,
+        content_padding_px=padding_px,
+        fitted_width_px=fitted_width,
+        fitted_height_px=fitted_height,
         warnings=warnings,
     )
 
