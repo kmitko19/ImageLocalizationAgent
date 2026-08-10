@@ -603,7 +603,7 @@ def expand_text_mask(
     """Expand a raw text mask for future inpainting without modifying the raw mask."""
     if mask.size == 0 or not mask.any():
         return mask.copy()
-    dilation_px = int(round(estimated_text_height * EXPANSION_HEIGHT_RATIO))
+    dilation_px = int(math.ceil(estimated_text_height * EXPANSION_HEIGHT_RATIO))
     dilation_px = max(MIN_EXPANSION_PX, min(MAX_EXPANSION_PX, dilation_px))
     kernel = cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE,

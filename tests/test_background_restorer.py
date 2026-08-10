@@ -380,6 +380,56 @@ def test_solid_blue_background_does_not_leave_white_residual():
     assert float(np.mean(blue_distance)) < 25.0
 
 
+def test_bright_antialiased_fx_on_red_background_is_fully_restored():
+    red = (180, 60, 60)
+    bbox = BoundingBox(x=20, y=130, width=240, height=70)
+    canvas = Image.new("RGB", (320, 260), color=(245, 240, 232))
+    draw = ImageDraw.Draw(canvas)
+    draw.rectangle(
+        (bbox.x, bbox.y, bbox.x + bbox.width - 1, bbox.y + bbox.height - 1),
+        fill=red,
+    )
+    draw.text((bbox.x + 10, bbox.y + 8), "FX", fill=(240, 240, 240))
+
+    patch = np.array(canvas)[bbox.y : bbox.y + bbox.height, bbox.x : bbox.x + bbox.width]
+    bright_text = np.mean(patch, axis=2) > 170
+    raw_mask = np.zeros((bbox.height, bbox.width), dtype=np.uint8)
+    raw_mask[np.mean(patch, axis=2) > 200] = MASK_FOREGROUND_VALUE
+    expanded = expand_text_mask(raw_mask, estimated_text_height=28)
+
+    block = _block(
+        bbox=bbox,
+        mask=raw_mask,
+        background=BackgroundInfo(
+            background_type="solid",
+            dominant_color="#B43C3C",
+            preferred_restore_method="fill",
+        ),
+        text_height=28,
+    )
+
+    result = restore_text_background(canvas, block, mask=raw_mask)
+    restored_patch = np.array(result.image)[bbox.y : bbox.y + bbox.height, bbox.x : bbox.x + bbox.width]
+
+    assert result.success is True
+    assert result.method == "fill"
+    assert int(np.count_nonzero(raw_mask)) > 0
+    assert int(np.count_nonzero(expanded)) > int(np.count_nonzero(raw_mask))
+
+    residual_bright = bright_text & (np.linalg.norm(
+        restored_patch.astype(np.float32) - np.array(red, dtype=np.float32),
+        axis=2,
+    ) > 18.0)
+    assert int(np.count_nonzero(residual_bright)) == 0
+
+    outside = ~expanded.astype(bool)
+    if np.any(outside):
+        outside_delta = np.abs(
+            restored_patch[outside].astype(np.int16) - patch[outside].astype(np.int16)
+        )
+        assert int(np.count_nonzero(outside_delta)) == 0
+
+
 def test_solid_fill_color_ignores_outside_canvas_padding():
     blue = (30, 80, 160)
     cream = (245, 240, 232)
