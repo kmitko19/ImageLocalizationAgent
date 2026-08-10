@@ -29,7 +29,7 @@
 ### Требования
 
 - Windows 10
-- Python 3.11+ (проект проверен на Python 3.12)
+- Python 3.12 (разработка и полный test suite проверены на Python 3.12.10; другие версии Python проектом не верифицированы)
 - Интернет для OpenAI API (GUI / live pipeline) и первичной загрузки моделей EasyOCR
 - Ключ `OPENAI_API_KEY` в `.env`
 
